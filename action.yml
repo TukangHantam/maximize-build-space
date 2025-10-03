@@ -45,7 +45,7 @@ runs:
   using: "composite"
   steps:
     - name: Disk space report before modification
-      if: ${{ inputs.show-disk-space }}
+      if: ${{ inputs.show-disk-space == 'true' }}
       shell: bash
       run: |
         echo "Memory and swap:"
@@ -143,7 +143,7 @@ runs:
         echo
 
     - name: Disk space report after modification
-      if: ${{ inputs.show-disk-space }}
+      if: ${{ inputs.show-disk-space == 'true' }}
       shell: bash
       run: |
         echo "Memory and swap:"
