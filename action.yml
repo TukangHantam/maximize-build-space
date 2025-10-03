@@ -1,0 +1,156 @@
+name: "Maximize build disk space"
+description: "Maximize the available disk space for your build job"
+inputs:
+  remove-dotnet:
+    description: "Removes .NET runtime and libraries. (frees ~2 GB)"
+    required: false
+    default: false
+  remove-haskell:
+    description: "Removes GHC (Haskell) artifacts. (frees ~5.2 GB)"
+    required: false
+    default: false
+  remove-codeql:
+    description: "Removes CodeQL Action Bundles. (frees ~5.4 GB)"
+    required: false
+    default: false
+  remove-android:
+    description: "Removes Android SDKs and Tools. (frees ~9 GB)"
+    required: false
+    default: false
+  remove-cached-tools:
+    description: "Removes cached tools used by setup actions by GitHub. (frees ~8.3 GB)"
+    required: false
+    default: false
+  remove-docker-images:
+    description: "Removes cached Docker images. (frees ~3.2 GB)"
+    required: false
+    default: false
+  remove-large-packages:
+    description: "Removes unwanted large Apt packages. (frees ~3.1 GB)"
+    required: false
+    default: false
+  verbose:
+    description: "Enables detailed logging of the action"
+    required: false
+    default: false
+  show-disk-space:
+    description: "Enables to not show check Disk space"
+    required: false
+    default: false
+
+branding:
+  icon: "crop"
+  color: "blue"
+runs:
+  using: "composite"
+  steps:
+    - name: Disk space report before modification
+      if: ${{ inputs.show-disk-space }}
+      shell: bash
+      run: |
+        echo "Memory and swap:"
+        sudo free -h
+        echo
+        sudo swapon --show
+        echo
+
+        echo "Available storage:"
+        sudo df -h
+        echo
+
+    - name: Maximize build disk space
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        removing=""
+        [[ ${{ inputs.remove-dotnet }} == 'true' ]] && removing+="dotnet "
+        [[ ${{ inputs.remove-android }} == 'true' ]] && removing+="android "
+        [[ ${{ inputs.remove-haskell }} == 'true' ]] && removing+="haskell "
+        [[ ${{ inputs.remove-codeql }} == 'true' ]] && removing+="codeql "
+        [[ ${{ inputs.remove-cached-tools }} == 'true' ]] && removing+="cached_tools "
+        [[ ${{ inputs.remove-docker-images }} == 'true' ]] && removing+="docker "
+        echo "Removing: $removing"
+
+        verbose=""
+        if [[ ${{ inputs.verbose }} == 'true' ]]; then
+          verbose=-v
+        fi
+
+        echo "Removing unwanted software..."
+        pids=()
+        (
+          [[ ${{ inputs.remove-dotnet }} == 'true' ]] && sudo rm -rf ${verbose} /usr/share/dotnet &
+          pids+=($!)
+          [[ ${{ inputs.remove-haskell }} == 'true' ]] && sudo rm -rf ${verbose} /opt/ghc /usr/local/.ghcup &
+          pids+=($!)
+          [[ ${{ inputs.remove-codeql }} == 'true' ]] && sudo rm -rf ${verbose} /opt/hostedtoolcache/CodeQL &
+          pids+=($!)
+          [[ ${{ inputs.remove-android }} == 'true' ]] && sudo rm -rf ${verbose} /usr/local/lib/android &
+          pids+=($!)
+          [[ ${{ inputs.remove-cached-tools }} == 'true' ]] && sudo rm -rf ${verbose} "$AGENT_TOOLSDIRECTORY" &
+          pids+=($!)
+        )
+        for pid in "${pids[@]}"; do
+          wait $pid || true
+        done
+
+        [[ ${{ inputs.remove-docker-images }} == 'true' ]] && sudo docker image prune --all --force &
+        pid_docker=$!
+        [ -n "$pid_docker" ] && wait $pid_docker || true
+
+        if [[ ${{ inputs.remove-large-packages }} == 'true' ]]; then
+          echo "Removing large packages..."
+          sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' > /dev/null
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            sudo apt-get remove -y google-chrome-stable --fix-missing > /dev/null
+            sudo apt-get remove -y microsoft-edge-stable --fix-missing > /dev/null
+            sudo apt-get remove -y google-cloud-cli --fix-missing > /dev/null
+            sudo apt-get remove -y powershell --fix-missing > /dev/null
+          fi
+          sudo apt-get remove -y azure-cli firefox mono-devel libgl1-mesa-dri --fix-missing > /dev/null
+          
+          sudo apt-get autoremove -y > /dev/null &
+          pid_autoremove=$!
+          sudo apt-get clean > /dev/null &
+          pid_clean=$!
+          sudo rm -rf ${verbose} /tmp/* > /dev/null &
+          pid_tmp=$!
+          rm -rf ${verbose} ~/.cache > /dev/null &
+          pid_cache=$!
+
+          [ -n "$pid_autoremove" ] && wait $pid_autoremove || true
+          [ -n "$pid_clean" ] && wait $pid_clean || true
+          [ -n "$pid_tmp" ] && wait $pid_tmp || true
+          [ -n "$pid_cache" ] && wait $pid_cache || true
+        fi
+
+        # Additional optional cleanup (Chromium, Edge drivers, etc.) - independent of large packages
+        echo "Performing additional cleanup..."
+        sudo rm -rf ${verbose} /usr/local/share/powershell || true
+        sudo rm -rf ${verbose} /usr/local/share/chromium || true
+        sudo rm -rf ${verbose} /usr/local/share/edge_driver || true
+        sudo rm -rf ${verbose} /usr/local/share/chromedriver || true
+
+        echo "Creating 4GB swap file..."
+        sudo swapoff -a
+        sudo rm -f ${verbose} /mnt/swapfile
+        sudo fallocate -l 4G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        echo "Removing unwanted software and Creating swapfile Done...."
+        echo
+
+    - name: Disk space report after modification
+      if: ${{ inputs.show-disk-space }}
+      shell: bash
+      run: |
+        echo "Memory and swap:"
+        sudo free -h
+        echo
+        sudo swapon --show
+        echo
+
+        echo "Available storage:"
+        sudo df -h
